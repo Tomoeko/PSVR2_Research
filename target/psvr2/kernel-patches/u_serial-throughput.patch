@@ -1,0 +1,33 @@
+diff --git a/drivers/usb/gadget/function/u_serial.c b/drivers/usb/gadget/function/u_serial.c
+--- a/drivers/usb/gadget/function/u_serial.c
++++ b/drivers/usb/gadget/function/u_serial.c
+@@ -77,8 +77,9 @@
+  * next layer of buffering.  For TX that's a circular buffer; for RX
+  * consider it a NOP.  A third layer is provided by the TTY code.
+  */
+-#define QUEUE_SIZE		16
+-#define WRITE_BUF_SIZE		8192		/* TX only */
++#define QUEUE_SIZE		32
++#define WRITE_BUF_SIZE		65536		/* TX only */
++#define REQ_BUF_MULT		32		/* USB req = maxpacket * N */
+ 
+ /* circular buffer */
+ struct gs_buf {
+@@ -373,7 +374,7 @@ __acquires(&port->port_lock)
+ 			break;
+ 
+ 		req = list_entry(pool->next, struct usb_request, list);
+-		len = gs_send_packet(port, req->buf, in->maxpacket);
++		len = gs_send_packet(port, req->buf, req->length);
+ 		if (len == 0) {
+ 			wake_up_interruptible(&port->drain_wait);
+ 			break;
+@@ -647,7 +648,7 @@ static int gs_alloc_requests(struct usb_ep *ep, struct list_head *head,
+ 	 * be as speedy as we might otherwise be.
+ 	 */
+ 	for (i = 0; i < n; i++) {
+-		req = gs_alloc_req(ep, ep->maxpacket, GFP_ATOMIC);
++		req = gs_alloc_req(ep, ep->maxpacket * REQ_BUF_MULT, GFP_ATOMIC);
+ 		if (!req)
+ 			return list_empty(head) ? -ENOMEM : 0;
+ 		req->complete = fn;

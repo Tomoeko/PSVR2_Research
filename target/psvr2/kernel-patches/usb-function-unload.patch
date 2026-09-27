@@ -1,0 +1,16 @@
+diff --git a/include/linux/usb/composite.h b/include/linux/usb/composite.h
+--- a/include/linux/usb/composite.h
++++ b/include/linux/usb/composite.h
+@@ -613,7 +613,11 @@
+ 	{								\
+ 		return usb_function_register(&_name ## usb_func);	\
+ 	}								\
+-	static void __exit _name ## mod_exit(void)			\
++	/* Keep cleanup in module core on kernels without MODULE_UNLOAD. */	\
++	/* The PSVR2 teardown helper invokes cleanup_module before freeing */	\
++	/* a module; placing this in .exit.text makes the loader discard */	\
++	/* the callback and prevents a cleanup-aware teardown. */		\
++	static void _name ## mod_exit(void)				\
+ 	{								\
+ 		usb_function_unregister(&_name ## usb_func);		\
+ 	}								\

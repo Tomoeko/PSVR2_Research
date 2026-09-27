@@ -1,0 +1,7 @@
+build*/
+.local/
+downloads/
+.DS_Store
+*.raw
+*.ppm
+*.img

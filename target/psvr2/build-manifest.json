@@ -1,0 +1,187 @@
+{
+  "schema": 1,
+  "firmwares": {
+    "01.10": {
+      "label": "1.10 or below",
+      "system_min": "0.00",
+      "system_max": "1.10",
+      "cflags": [
+        "-DPSVR2_SOURCE_FAMILY_0110=1",
+        "-DPSVR2_VER_0110=1"
+      ],
+      "validation": "source-supported; device validation required"
+    },
+    "06.00": {
+      "label": "6.00",
+      "system_min": "6.00",
+      "system_max": "6.00",
+      "cflags": [
+        "-DPSVR2_SOURCE_FAMILY_0600=1"
+      ],
+      "validation": "device-tested"
+    }
+  },
+  "modules": {
+    "stage1": {
+      "category": "custom",
+      "path": "modules/stage1",
+      "firmwares": [
+        "01.10",
+        "06.00"
+      ]
+    },
+    "stage3_serial": {
+      "category": "custom",
+      "path": "modules/stage3_serial",
+      "firmwares": [
+        "01.10",
+        "06.00"
+      ],
+      "runtime_modules": [
+        {
+          "name": "libcomposite",
+          "target": "drivers/usb/gadget/libcomposite.ko",
+          "package": false,
+          "sources": [
+            "drivers/usb/gadget/composite.c",
+            "drivers/usb/gadget/configfs.c"
+          ]
+        },
+        {
+          "name": "u_serial",
+          "target": "drivers/usb/gadget/function/u_serial.ko",
+          "sources": [
+            "drivers/usb/gadget/function/u_serial.c",
+            "drivers/usb/gadget/function/u_serial.h"
+          ]
+        },
+        {
+          "name": "usb_f_acm",
+          "target": "drivers/usb/gadget/function/usb_f_acm.ko",
+          "sources": [
+            "drivers/usb/gadget/function/f_acm.c",
+            "drivers/usb/gadget/function/u_serial.h"
+          ]
+        }
+      ]
+    },
+    "rmmod_helper": {
+      "category": "custom",
+      "path": "modules/rmmod_helper",
+      "firmwares": [
+        "01.10",
+        "06.00"
+      ]
+    }
+  },
+  "tools": {
+    "busybox": {
+      "category": "utility",
+      "build_system": "busybox",
+      "version": "1.29.0",
+      "source_url": "https://www.playstation.com/content/dam/global_pdc/en/external-resources/ps-vr2-oss/busybox-PSVR2.tar.zip",
+      "source_sha256": "df013afae2df0d298404a6cda6f57d740abe79672fce72a7fc8a8bb50612d035",
+      "config": "tools/busybox/psvr2-maximal.config",
+      "link": "static",
+      "external": true,
+      "patches": [
+        "tools/busybox/link-options.patch"
+      ]
+    },
+    "open_vrhmd": {
+      "category": "display",
+      "sources": [
+        "tools/open_vrhmd/main.c",
+        "tools/open_vrhmd/core/device.c",
+        "tools/open_vrhmd/core/devmem.c",
+        "tools/open_vrhmd/core/system.c",
+        "tools/open_vrhmd/core/fan_ctrl.c",
+        "tools/open_vrhmd/audio/audio.c",
+        "tools/open_vrhmd/display/display.c",
+        "tools/open_vrhmd/display/panel.c",
+        "tools/open_vrhmd/render/color.c",
+        "tools/open_vrhmd/render/gpu_app.c",
+        "tools/open_vrhmd/render/gpu_gradient.c",
+        "tools/open_vrhmd/render/matrix.c",
+        "tools/open_vrhmd/render/media.c",
+        "tools/open_vrhmd/stream/mirrorscope.c",
+        "tools/open_vrhmd/stream/video.c",
+        "tools/open_vrhmd/codec/png.c",
+        "tools/open_vrhmd/codec/jpeg.c",
+        "tools/open_vrhmd/codec/mp3.c",
+        "tools/open_vrhmd/codec/mpeg.c"
+      ],
+      "cflags": [
+        "-std=gnu11",
+        "-DGPU_RENDER"
+      ],
+      "link": "dynamic",
+      "libraries": [
+        "dl",
+        "m",
+        "pthread"
+      ],
+      "package": {
+        "directory": "open_vrhmd_folder"
+      },
+      "firmwares": [
+        "06.00"
+      ],
+      "headers": [
+        "tools/open_vrhmd/**/*.h"
+      ]
+    },
+    "input_verify": {
+      "category": "diagnostic",
+      "sources": [
+        "tools/input_verify.c"
+      ],
+      "link": "dynamic"
+    },
+    "kill": {
+      "category": "utility",
+      "sources": [
+        "tools/kill.c"
+      ],
+      "cflags": [
+        "-Os",
+        "-static",
+        "-nostdlib",
+        "-nostartfiles"
+      ]
+    }
+  },
+  "sources": {
+    "page": "https://www.playstation.com/en-us/oss/ps-vr2/",
+    "kernel": {
+      "schema": 1,
+      "source": {
+        "page": "https://www.playstation.com/en-us/oss/ps-vr2/linux-kernel/",
+        "note": "Project-pinned SHA-256 values calculated from archives downloaded over HTTPS from Sony's source page; Sony does not publish signed checksums on that page.",
+        "retrieved": "2026-07-30"
+      },
+      "firmwares": {
+        "01.10": {
+          "archive_sha256": [
+            "6f0677f2b61c4696de996fc75845ccef1c9d5ed50fd8db1a0a295ad5921a33a5"
+          ],
+          "source_tree_git_sha1": "cbbca3e334a6baf9ae2b077dc1a89d991c2d5ac3",
+          "source_tree_sha256": "0f471460a75b10684f8ab5a7846529ddf92ad1fe001bcf1e8ff8ac748df3824c",
+          "url": "https://www.playstation.com/content/dam/global_pdc/en/external-resources/ps-vr2-oss/linux-PSVR2-01.10.tar.zip"
+        },
+        "06.00": {
+          "archive_sha256": [
+            "433cdded8938ba089377c62c8f4fc890207661036f39a4b8d41a15588fd82ad2"
+          ],
+          "source_tree_git_sha1": "65489ac96c4f1db4695dffa489fb49ad25283624",
+          "source_tree_sha256": "9e31501709178379d79299e78b7d3a98f6034d413ba9725387efcdfb209a330e",
+          "url": "https://www.playstation.com/content/dam/global_pdc/en-us/external-resources/oss/ps-vr2/linux-kernel/linux-PSVR2_06.00.tar.zip"
+        }
+      }
+    },
+    "glibc": {
+      "source_url": "https://www.playstation.com/content/dam/global_pdc/en/external-resources/ps-vr2-oss/glibc-PSVR2.tar.zip",
+      "source_sha256": "ca55106d15d94ffbb1b7d7a6b8531029210a34e1fef8bb77747a26bd26058585"
+    }
+  }
+}

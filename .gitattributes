@@ -1,0 +1,11 @@
+* text=auto eol=lf
+*.patch -whitespace
+*.c text
+*.h text
+*.inc text
+*.S text
+*.py text
+*.sh text
+*.md text
+*.json text
+*.patch text

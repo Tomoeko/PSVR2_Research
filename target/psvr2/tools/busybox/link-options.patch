@@ -1,0 +1,34 @@
+--- a/scripts/trylink
++++ b/scripts/trylink
+@@ -91,8 +91,21 @@
+ 
+ START_GROUP="-Wl,--start-group"
+ END_GROUP="-Wl,--end-group"
++# Informational flags are optional; not every target linker accepts them.
++WARN_COMMON=""
++VERBOSE_LINK=""
++MAP_LINK=""
++if check_cc "-Wl,--warn-common"; then
++    WARN_COMMON="-Wl,--warn-common"
++fi
++if check_cc "-Wl,--verbose"; then
++    VERBOSE_LINK="-Wl,--verbose"
++fi
++if check_cc "-Wl,-Map,$EXE.map"; then
++    MAP_LINK="-Wl,-Map,$EXE.map"
++fi
+ INFO_OPTS() {
+-	echo "-Wl,--warn-common -Wl,-Map,$EXE.map -Wl,--verbose"
++	echo "$WARN_COMMON $MAP_LINK $VERBOSE_LINK"
+ }
+ 
+ # gold may not support --sort-common (yet)
+@@ -319,7 +332,7 @@
+ 		$SORT_SECTION \
+ 		$GC_SECTIONS \
+ 		-L"$sharedlib_dir" -lbusybox \
+-		-Wl,--warn-common \
++		$WARN_COMMON \
+ 	|| {
+ 	    echo "Linking $EXE failed"
+ 	    cat $EXE.out
