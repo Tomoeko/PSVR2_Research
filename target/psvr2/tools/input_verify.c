@@ -2,7 +2,8 @@
  * input_verify.c — PSVR2 Controller Verification Tool
  * Decodes 16-byte packets from /dev/fast_input and prints them.
  *
- * Automatically triggers input takeover via /proc/stage3 if needed.
+ * Uses Stage3's software ACM bridge by default. Hardware endpoint takeover
+ * is selected explicitly with --endpoint.
  *
  * Packet format (16 bytes, little-endian):
  *   [0:2]   'CT'        header
@@ -27,9 +28,6 @@
 #define PROC_PATH     "/proc/stage3"
 #define PACKET_SIZE   16
 
-/* Default data endpoint to takeover (can be overridden via argv[1]) */
-#define DEFAULT_EP    2
-
 struct controller_packet {
     char header[2];      /* 'CT' */
     int16_t lx, ly;
@@ -38,8 +36,7 @@ struct controller_packet {
     uint8_t pad[2];      /* DMA alignment padding */
 } __attribute__((packed));
 
-/* Attempt to trigger input takeover via /proc/stage3 */
-static int trigger_input_takeover(int ep_idx)
+static int trigger_input_route(int ep_idx)
 {
     int fd;
     char cmd[32];
@@ -52,10 +49,13 @@ static int trigger_input_takeover(int ep_idx)
         return -1;
     }
 
-    n = snprintf(cmd, sizeof(cmd), "input %d", ep_idx);
-    if (write(fd, cmd, n) < 0) {
-        fprintf(stderr, "Warning: Could not write to %s: %s\n",
-                PROC_PATH, strerror(errno));
+    n = ep_idx ? snprintf(cmd, sizeof(cmd), "input %d", ep_idx)
+               : snprintf(cmd, sizeof(cmd), "input bridge");
+    ssize_t written;
+    do { written = write(fd, cmd, (size_t)n); } while (written < 0 && errno == EINTR);
+    if (written != n) {
+        fprintf(stderr, "Warning: Could not write to %s: %s\n", PROC_PATH,
+                written < 0 ? strerror(errno) : "incomplete command write");
         close(fd);
         return -1;
     }
@@ -79,38 +79,33 @@ int main(int argc, char **argv)
     int fd;
     struct controller_packet pkt;
     ssize_t n;
-    int ep_idx = DEFAULT_EP;
+    int ep_idx = 0;
     uint32_t pps_count = 0;
     struct timespec ts_start, ts_now;
     int first = 1;
 
-    /* Optional: specify endpoint index */
-    if (argc > 1) {
-        ep_idx = atoi(argv[1]);
-        if (ep_idx < 1 || ep_idx > 9) {
-            fprintf(stderr, "Usage: %s [endpoint_idx 1-9] (default: %d)\n",
-                    argv[0], DEFAULT_EP);
-            return 1;
-        }
+    if (argc == 2 && (!strcmp(argv[1], "--help") || !strcmp(argv[1], "-h"))) {
+        printf("Usage: %s [--bridge | --endpoint N]\n"
+               "Default: Stage3 software ACM input bridge. N must be 1-9.\n", argv[0]);
+        return 0;
     }
-
-    /* Try to open /dev/fast_input first — if it fails, trigger takeover */
+    if (argc == 3 && !strcmp(argv[1], "--endpoint") &&
+        strlen(argv[2]) == 1 && argv[2][0] >= '1' && argv[2][0] <= '9') {
+        ep_idx = argv[2][0] - '0';
+    } else if (argc != 1 && !(argc == 2 && !strcmp(argv[1], "--bridge"))) {
+        fprintf(stderr, "Usage: %s [--bridge | --endpoint N]\n", argv[0]);
+        return 1;
+    }
+    if (trigger_input_route(ep_idx)) return 1;
     fd = open(DEV_PATH, O_RDONLY);
     if (fd < 0) {
-        fprintf(stderr, "[*] %s not ready, triggering input takeover on ep%d...\n",
-                DEV_PATH, ep_idx);
-        trigger_input_takeover(ep_idx);
-
-        fd = open(DEV_PATH, O_RDONLY);
-        if (fd < 0) {
-            fprintf(stderr, "Error: Could not open %s after takeover: %s\n",
-                    DEV_PATH, strerror(errno));
-            fprintf(stderr, "Make sure the kernel module is loaded.\n");
-            return 1;
-        }
+        fprintf(stderr, "Error: Could not open %s after route setup: %s\n",
+                DEV_PATH, strerror(errno));
+        return 1;
     }
 
-    printf("Listening for controller data on %s (ep%d)...\n", DEV_PATH, ep_idx);
+    printf("Listening for controller data on %s (%s)...\n", DEV_PATH,
+           ep_idx ? "explicit hardware endpoint" : "software ACM bridge");
     printf("Format: [LX, LY] [RX, RY] | Buttons | PPS\n");
     printf("------------------------------------------\n");
 
@@ -121,7 +116,13 @@ int main(int argc, char **argv)
         if (n < 0) {
             if (errno == EAGAIN || errno == EINTR) continue;
             perror("read");
-            break;
+            close(fd);
+            return 1;
+        }
+        if (n == 0) {
+            fprintf(stderr, "Input transport disconnected.\n");
+            close(fd);
+            return 1;
         }
 
         if (n >= 14) { /* Accept both 14 and 16 byte packets */

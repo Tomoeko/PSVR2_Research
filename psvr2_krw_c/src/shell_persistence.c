@@ -148,9 +148,6 @@ static bool persistence_firmware_allowed(const psvr2_shell *shell) {
         !shell->runtime->krw->ex ||
         !shell->runtime->krw->ex->constants)
         return false;
-    const char *override = getenv("PSVR2_BUSYBOX");
-    if (override && *override)
-        return psvr2_file_exists(override) ? override : NULL;
     const psvr2_constants *constants =
         shell->runtime->krw->ex->constants;
     if (constants->firmware_forced) {
@@ -259,6 +256,9 @@ static bool locate_busybox(persistence_session *session) {
 
 static const char *local_busybox(
     const persistence_session *session) {
+    const char *override = getenv("PSVR2_BUSYBOX");
+    if (override && *override)
+        return psvr2_file_exists(override) ? override : NULL;
     const psvr2_constants *constants =
         session && session->shell && session->shell->runtime &&
         session->shell->runtime->krw &&

@@ -150,11 +150,12 @@ bool psvr2_stage1_exec(psvr2_runtime *runtime, const char *command,
 }
 
 bool mock_local_file_exists(const char *path) {
-    return strstr(path, "/tools/busybox") != NULL;
+    return !strcmp(path, "/mock/external/busybox") ||
+        strstr(path, "/tools/busybox") != NULL;
 }
 
 bool mock_local_sha256_file(const char *path, uint8_t digest[32], uint64_t *size) {
-    assert(strstr(path, "/tools/busybox"));
+    assert(mock_local_file_exists(path));
     memset(digest, 0xdd, 32);
     *size = 4096;
     return true;
@@ -283,6 +284,40 @@ static void test_unpersist_flushes(psvr2_shell *shell, persistence_plan *plan) {
     }
 }
 
+static void test_busybox_override(psvr2_shell *shell,
+    psvr2_constants *constants, persistence_plan *plan) {
+    persistence_session session = {.shell = shell};
+    assert(setenv("PSVR2_BUSYBOX", "/mock/external/busybox", 1) == 0);
+    assert(!strcmp(local_busybox(&session), "/mock/external/busybox"));
+
+    /* A valid executable override cannot bypass either firmware guard. */
+    reset_case(true, plan);
+    constants->firmware_forced = true;
+    assert(!open_session(&session, shell, false, false));
+    assert(!trace_count && !mounted && !fsync_count);
+    assert_hash(PERSIST_MODULES "/stage1.ko", old_hash);
+    constants->firmware_forced = false;
+    constants->version = UINT32_C(0x07000000);
+    assert(!open_session(&session, shell, false, false));
+    assert(!trace_count && !mounted && !fsync_count);
+    constants->version = PSVR2_FW_0600;
+
+    /* A supported session uses the supplied host path for hash validation. */
+    assert(install_plan(shell, plan));
+    assert_hash(PERSIST_MODULES "/stage1.ko", new_hash);
+    assert(!mounted);
+
+    /* An explicit missing input fails rather than using the default output. */
+    assert(setenv("PSVR2_BUSYBOX", "/mock/missing/busybox", 1) == 0);
+    assert(!local_busybox(&session));
+    reset_case(true, plan);
+    assert(!open_session(&session, shell, false, false));
+    assert(!trace_count && !mounted && !fsync_count);
+    assert_hash(PERSIST_MODULES "/stage1.ko", old_hash);
+    assert(unsetenv("PSVR2_BUSYBOX") == 0);
+    assert(strstr(local_busybox(&session), "/tools/busybox"));
+}
+
 int main(void) {
     psvr2_constants constants = {.version = PSVR2_FW_0600};
     psvr2_exploit exploit = {.constants = &constants};
@@ -291,6 +326,8 @@ int main(void) {
     psvr2_shell shell = {.runtime = &runtime};
     persistence_plan plan;
     char backup[384], failed[384];
+    assert(unsetenv("PSVR2_BUSYBOX") == 0);
+    test_busybox_override(&shell, &constants, &plan);
 
     reset_case(true, &plan);
     assert(install_plan(&shell, &plan));

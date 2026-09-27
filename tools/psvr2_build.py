@@ -678,15 +678,17 @@ def executable(candidate: str) -> str | None:
 
 def find_homebrew() -> str | None:
     discovered = executable("brew")
-    if discovered:
-        return discovered
-    for candidate in (
-        "/opt/homebrew/bin/brew",
-        "/usr/local/bin/brew",
-    ):
-        if Path(candidate).is_file() and os.access(candidate, os.X_OK):
-            return candidate
-    return None
+    if platform.system() == "Darwin":
+        native_prefix = "/opt/homebrew" if platform.machine() == "arm64" else "/usr/local"
+        native = executable(native_prefix + "/bin/brew")
+        if native:
+            return native
+        # Avoid installing an Intel dependency chain into an Apple Silicon
+        # build (or conversely). Explicit nonstandard installations remain valid.
+        if discovered and not discovered.startswith(("/opt/homebrew/", "/usr/local/")):
+            return discovered
+        return None
+    return discovered
 
 
 def executable_in_common_macos_locations(name: str) -> str | None:
@@ -730,19 +732,13 @@ def discover_macos_tool(
     discovered = executable(configured) if configured else None
     if discovered:
         return discovered
-    discovered = executable(name)
-    if discovered:
-        return discovered
-    discovered = executable_in_common_macos_locations(name)
-    if discovered:
-        return discovered
     if brew:
         prefix = homebrew_prefix(brew)
         if prefix:
-            candidate = prefix / "bin" / name
-            if candidate.is_file() and os.access(candidate, os.X_OK):
-                return str(candidate)
-    return None
+            candidate = executable(str(prefix / "bin" / name))
+            if candidate:
+                return candidate
+    return executable(name) or executable_in_common_macos_locations(name)
 
 
 def is_gnu_make(candidate: str) -> bool:
@@ -817,6 +813,46 @@ def discover_kernel_host_helpers(brew: str | None = None) -> dict[str, str | Non
         "bc": discover_macos_tool("bc", brew),
         "perl": discover_macos_tool("perl", brew),
     }
+
+
+def host_tool_version_ok(path: str, minimum: tuple[int, int] = (3, 20)) -> bool:
+    try:
+        result = subprocess.run([path, "--version"], check=True,
+                                capture_output=True, text=True)
+        version = result.stdout.splitlines()[0].split()[-1].split(".")
+        return tuple(int(part) for part in version[:2]) >= minimum
+    except (OSError, subprocess.CalledProcessError, ValueError, IndexError):
+        return False
+
+
+def host_pkg_config_environment(brew: str | None) -> dict[str, str]:
+    environment = os.environ.copy()
+    prefix = homebrew_prefix(brew) if brew else None
+    if prefix:
+        paths = [str(prefix / "lib/pkgconfig"), str(prefix / "share/pkgconfig")]
+        if environment.get("PKG_CONFIG_PATH"):
+            paths.append(environment["PKG_CONFIG_PATH"])
+        environment["PKG_CONFIG_PATH"] = os.pathsep.join(paths)
+    return environment
+
+
+def discover_host_build_helpers(brew: str | None = None) -> dict[str, str | None]:
+    cmake = discover_macos_tool("cmake", brew)
+    ctest = discover_macos_tool("ctest", brew)
+    cmake = cmake if cmake and host_tool_version_ok(cmake) else None
+    ctest = ctest if ctest and host_tool_version_ok(ctest) else None
+    pkg_config = discover_macos_tool("pkg-config", brew) or discover_macos_tool("pkgconf", brew)
+    libusb = None
+    if pkg_config:
+        try:
+            result = subprocess.run([pkg_config, "--exists", "libusb-1.0"],
+                                    env=host_pkg_config_environment(brew),
+                                    check=False, capture_output=True, text=True)
+            if result.returncode == 0:
+                libusb = "libusb-1.0"
+        except OSError:
+            pass
+    return {"cmake": cmake, "ctest": ctest, "pkg_config": pkg_config, "libusb": libusb}
 
 
 def confirm(question: str, *, input_fn: Any = input) -> bool:
@@ -1990,6 +2026,11 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         if not check("external host ELF header", elf_header.is_file(),
                      "run ./build.sh sources glibc" if not elf_header.is_file() else str(elf_header)):
             failures += 1
+    host_build = discover_host_build_helpers(find_homebrew() if platform.system() == "Darwin" else None)
+    for name, label in (("cmake", "CMake >=3.20"), ("ctest", "CTest >=3.20"),
+                        ("pkg_config", "pkg-config"), ("libusb", "libusb development files")):
+        if not check(label, bool(host_build[name]), host_build[name] or "not found"):
+            failures += 1
     git = executable("git")
     if not check("Git snapshot engine", git is not None, git or "git"):
         failures += 1
@@ -2153,6 +2194,7 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
     cross_prefix = discover_cross_prefix(data, brew)
     target_compiler = discover_target_compiler(data, brew)
     host_helpers = discover_kernel_host_helpers(brew)
+    host_build = discover_host_build_helpers(brew)
 
     if gmake:
         print(f"[ok     ] GNU make: {gmake}")
@@ -2163,6 +2205,11 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
     for name, path in host_helpers.items():
         if path:
             print(f"[ok     ] kernel host helper {name}: {path}")
+
+    for name, label in (("cmake", "CMake >=3.20"), ("ctest", "CTest >=3.20"),
+                        ("pkg_config", "pkg-config"), ("libusb", "libusb development files")):
+        if host_build[name]:
+            print(f"[ok     ] {label}: {host_build[name]}")
 
     missing: list[str] = []
     if not gmake:
@@ -2175,6 +2222,13 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
         missing.append("bc calculator")
     if not host_helpers["perl"]:
         missing.append("Perl")
+
+    if not host_build["cmake"] or not host_build["ctest"]:
+        missing.append("CMake and CTest")
+    if not host_build["pkg_config"]:
+        missing.append("pkg-config")
+    if not host_build["libusb"]:
+        missing.append("libusb development files")
 
     if not missing:
         if brew:
@@ -2215,6 +2269,12 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
     if missing:
         assert brew is not None
         install_specs = (
+            ("CMake and CTest", [brew, "install", "cmake"],
+             lambda: all(discover_host_build_helpers(brew)[name] for name in ("cmake", "ctest"))),
+            ("pkg-config", [brew, "install", "pkgconf"],
+             lambda: discover_host_build_helpers(brew)["pkg_config"]),
+            ("libusb development files", [brew, "install", "libusb"],
+             lambda: discover_host_build_helpers(brew)["libusb"]),
             (
                 "GNU make",
                 [brew, "install", "make"],
@@ -2260,6 +2320,7 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
         cross_prefix = discover_cross_prefix(data, brew)
         target_compiler = discover_target_compiler(data, brew)
         host_helpers = discover_kernel_host_helpers(brew)
+        host_build = discover_host_build_helpers(brew)
         if not all(
             (
                 gmake,
@@ -2267,6 +2328,7 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
                 target_compiler,
                 host_helpers["bc"],
                 host_helpers["perl"],
+                *host_build.values(),
             )
         ):
             print("One or more required tools remain missing.")
@@ -2287,6 +2349,7 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
         target_compiler[0],
         host_helpers["bc"],
         host_helpers["perl"],
+        host_build["cmake"], host_build["ctest"], host_build["pkg_config"],
     ]
     data["host_paths"] = list(
         dict.fromkeys(
@@ -2295,6 +2358,7 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
             if item and os.sep in item
         )
     )
+    data["host_build_tools"] = host_build
     write_json(config_path(args), data)
     print(f"Native macOS toolchains are ready ({platform.machine()}).")
     print(f"Saved toolchain configuration to {config_path(args)}")
@@ -3003,6 +3067,17 @@ def cmd_sdk_import(args: argparse.Namespace) -> int:
     return 0
 
 
+def ensure_macos_host_elf_header(firmware: str) -> None:
+    if platform.system() != "Darwin":
+        return
+    host_include = Path(os.environ.get("PSVR2_HOST_INCLUDE", str(REPO_ROOT / ".local/inputs/host-include"))).expanduser().resolve()
+    if (host_include / "elf.h").is_file():
+        print(f"Reusing existing host ELF declarations: {host_include / 'elf.h'}")
+        return
+    cmd_sources(argparse.Namespace(component="glibc", cache=None,
+                                   host_include=str(host_include), firmware=firmware))
+
+
 @requires_source_lease
 def cmd_setup(args: argparse.Namespace) -> int:
     bootstrap_args = argparse.Namespace(
@@ -3050,6 +3125,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
             f"'./build.sh prepare --firmware {firmware}' before building modules."
         )
         return 0
+
+    ensure_macos_host_elf_header(firmware)
 
     settings_args = argparse.Namespace(
         config=args.config,
@@ -3718,6 +3795,7 @@ def cmd_setup_all(args: argparse.Namespace) -> int:
     if args.no_build:
         print("\nAll source families are imported and diffed.")
         return 0
+    ensure_macos_host_elf_header(DEFAULT_FIRMWARE)
     matrix_args = argparse.Namespace(
         config=args.config,
         firmwares=["all"],

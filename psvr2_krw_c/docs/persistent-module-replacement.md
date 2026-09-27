@@ -19,7 +19,11 @@ SDK. Provide a static AArch64 Linux BusyBox with `fsync`, `sha256sum`, `stat`,
 `mount`, `umount`, `cp`, `mv`, `mkdir`, and `sync` applets. Set `PSVR2_BUSYBOX` to
 its host path before starting the toolkit. The transaction compares the target
 BusyBox against that local file, uploading a verified copy to `/tmp` when
-needed. No BusyBox or firmware binary is bundled.
+needed. No BusyBox or firmware binary is bundled. For a first installation,
+follow the [RAM deployment sequence](../../docs/build.md#ram-deployment-check)
+first: load `rmmod_helper` before Stage1 on a fresh boot, then test Stage3 and
+its dependencies. The startup command below assumes that verified chain or
+a previously installed persistent set.
 
 ```sh
 export PSVR2_BUSYBOX=/path/to/target/busybox
@@ -90,6 +94,34 @@ and endpoint state distinguish an idle bridge from a broken receive path.
 Use one host consumer per ACM port. USB reactivation can hang up an existing
 TTY file; the maintained bridge detects that hangup, discards partial packet
 residue, and reopens the TTY. A normal idle read does not trigger that recovery.
+
+## Complete persistent set
+
+For normal host startup after a fresh boot, the factory filesystem needs all
+of the following matching, RAM-tested files: `busybox`, `rmmod_helper.ko`,
+`stage1.ko`, `u_serial.ko`, `usb_f_acm.ko`, and `stage3_serial.ko`. Use
+`stage1_install` for Stage1 as described above. Upload the other candidates
+to `/tmp` with `krw fast_upload`, then install each one explicitly:
+
+```text
+krw persist busybox
+krw persist rmmod_helper.ko
+krw persist u_serial.ko
+krw persist usb_f_acm.ko
+krw persist stage3_serial.ko
+```
+
+Each command presents and verifies its own transaction; confirm only the
+displayed candidate and destination. A reported failure must be resolved
+before continuing. Each successful transaction checks the installed bytes
+and unmounts the factory filesystem.
+
+On the next boot, set `PSVR2_BUSYBOX` to the matching host BusyBox and start
+the host toolkit without `--tmp`. It loads the helper, Stage1, and the serial
+chain from `/data/modules`, which the firmware copies from the factory
+filesystem. Check `krw serial status` and `krw stage1_verify` against the host
+Stage1 file. These file transactions do not install a boot-time autostart
+launcher; the host toolkit starts the module chain.
 
 ## Transaction durability and recovery
 

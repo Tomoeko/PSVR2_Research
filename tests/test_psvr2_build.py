@@ -4,6 +4,7 @@ import argparse
 import importlib.util
 import io
 import json
+import os
 import shlex
 import stat
 import struct
@@ -561,6 +562,13 @@ class KernelPatchTests(unittest.TestCase):
 
 
 class BootstrapTests(unittest.TestCase):
+    def setUp(self):
+        self.host_build_mock = mock.patch.object(psvr2_build, "discover_host_build_helpers", return_value={
+            "cmake": "/mock/host/bin/cmake", "ctest": "/mock/host/bin/ctest",
+            "pkg_config": "/mock/host/bin/pkg-config", "libusb": "libusb-1.0"})
+        self.host_build_mock.start()
+        self.addCleanup(self.host_build_mock.stop)
+
     @staticmethod
     def make_executable(path: Path, contents: str = "#!/bin/sh\nexit 0\n") -> None:
         path.write_text(contents)
@@ -733,6 +741,139 @@ class BootstrapTests(unittest.TestCase):
             ],
         )
         self.assertEqual(installed, {"make", "target"})
+
+    def test_missing_host_requirements_install_and_save_paths_for_both_architectures(self):
+        for machine, prefix in (("arm64", "/opt/homebrew"), ("x86_64", "/usr/local")):
+            with self.subTest(machine=machine), tempfile.TemporaryDirectory() as temporary:
+                installed = set()
+                config = Path(temporary) / "config.json"
+                args = argparse.Namespace(config=str(config), check=False, yes=True)
+                def host_tools(_brew=None):
+                    return {"cmake": prefix + "/bin/cmake" if "cmake" in installed else None,
+                            "ctest": prefix + "/bin/ctest" if "cmake" in installed else None,
+                            "pkg_config": prefix + "/bin/pkg-config" if "pkgconf" in installed else None,
+                            "libusb": "libusb-1.0" if {"pkgconf", "libusb"} <= installed else None}
+                def install(command, **_kwargs):
+                    self.assertEqual(command[:2], [prefix + "/bin/brew", "install"])
+                    installed.add(command[-1])
+                with (mock.patch.object(psvr2_build.platform, "system", return_value="Darwin"),
+                      mock.patch.object(psvr2_build.platform, "machine", return_value=machine),
+                      mock.patch.object(psvr2_build, "command_line_tools_ready", return_value=True),
+                      mock.patch.object(psvr2_build, "find_homebrew", return_value=prefix + "/bin/brew"),
+                      mock.patch.object(psvr2_build, "discover_gnu_make", return_value=prefix + "/bin/gmake"),
+                      mock.patch.object(psvr2_build, "discover_cross_prefix", return_value=prefix + "/bin/aarch64-none-elf-"),
+                      mock.patch.object(psvr2_build, "discover_target_compiler", return_value=(prefix + "/bin/zig", "cc")),
+                      mock.patch.object(psvr2_build, "discover_kernel_host_helpers", return_value={"bc":"/usr/bin/bc","perl":"/usr/bin/perl"}),
+                      mock.patch.object(psvr2_build, "discover_host_build_helpers", side_effect=host_tools),
+                      mock.patch.object(psvr2_build, "run", side_effect=install), redirect_stdout(io.StringIO())):
+                    self.assertEqual(psvr2_build.cmd_bootstrap(args), 0)
+                saved = json.loads(config.read_text())
+                self.assertEqual(installed, {"cmake", "pkgconf", "libusb"})
+                self.assertIn(prefix + "/bin", saved["host_paths"])
+                self.assertEqual(saved["host_build_tools"]["pkg_config"], prefix + "/bin/pkg-config")
+
+    def test_check_mode_reports_missing_host_requirements_without_installing(self):
+        args = argparse.Namespace(config="/unused/config.json", check=True, yes=False)
+        output = io.StringIO()
+        with (mock.patch.object(psvr2_build.platform, "system", return_value="Darwin"),
+              mock.patch.object(psvr2_build, "load_config", return_value={"schema":1,"firmwares":{}}),
+              mock.patch.object(psvr2_build, "command_line_tools_ready", return_value=True),
+              mock.patch.object(psvr2_build, "find_homebrew", return_value=None),
+              mock.patch.object(psvr2_build, "discover_host_build_helpers", return_value={name:None for name in ("cmake","ctest","pkg_config","libusb")}),
+              mock.patch.object(psvr2_build, "run") as run,
+              mock.patch.object(psvr2_build, "write_json") as write,
+              redirect_stdout(output)):
+            self.assertEqual(psvr2_build.cmd_bootstrap(args), 1)
+        for label in ("CMake and CTest", "pkg-config", "libusb development files"):
+            self.assertIn("[missing] " + label, output.getvalue())
+        run.assert_not_called()
+        write.assert_not_called()
+
+
+class MacSetupPrerequisiteTests(unittest.TestCase):
+    def test_homebrew_discovery_prefers_matching_host_prefix(self):
+        for machine, native, other in (("arm64","/opt/homebrew","/usr/local"), ("x86_64","/usr/local","/opt/homebrew")):
+            def executable(name):
+                if name == "brew": return other + "/bin/brew"
+                if name == native + "/bin/brew": return name
+                return None
+            with (mock.patch.object(psvr2_build.platform, "system", return_value="Darwin"),
+                  mock.patch.object(psvr2_build.platform, "machine", return_value=machine),
+                  mock.patch.object(psvr2_build, "executable", side_effect=executable)):
+                self.assertEqual(psvr2_build.find_homebrew(), native + "/bin/brew")
+
+    def test_host_helper_detection_rejects_old_cmake_and_missing_libusb(self):
+        versions = {"cmake":"cmake version 3.19.8", "ctest":"ctest version 3.20.1"}
+        def run(command, **_kwargs):
+            if command[-1] == "--version":
+                return argparse.Namespace(stdout=versions[command[0]])
+            self.assertEqual(command, ["pkg-config", "--exists", "libusb-1.0"])
+            return argparse.Namespace(returncode=1)
+        with (mock.patch.object(psvr2_build, "discover_macos_tool", side_effect=lambda name,*_args:name),
+              mock.patch.object(psvr2_build.subprocess, "run", side_effect=run)):
+            found=psvr2_build.discover_host_build_helpers()
+        self.assertIsNone(found["cmake"])
+        self.assertEqual(found["ctest"], "ctest")
+        self.assertIsNone(found["libusb"])
+
+    def test_setup_fetches_public_elf_header_once_before_prepare(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            include = Path(temporary) / "include"
+            calls=[]
+            def fetch(args):
+                self.assertEqual(args.component, "glibc")
+                self.assertEqual(Path(args.host_include), include.resolve())
+                calls.append("glibc")
+                include.mkdir()
+                (include / "elf.h").write_text("public ELF declarations")
+            with (mock.patch.object(psvr2_build.platform, "system", return_value="Darwin"),
+                  mock.patch.dict(os.environ, {"PSVR2_HOST_INCLUDE":str(include)}),
+                  mock.patch.object(psvr2_build, "cmd_sources", side_effect=fetch)):
+                psvr2_build.ensure_macos_host_elf_header("06.00")
+                psvr2_build.ensure_macos_host_elf_header("06.00")
+            self.assertEqual(calls, ["glibc"])
+
+    def test_setup_imports_then_fetches_header_before_kernel_prepare(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            archive=root/"kernel.zip"
+            with zipfile.ZipFile(archive,"w"):
+                pass
+            include=root/"include"
+            calls=[]
+            arguments=argparse.Namespace(config=str(root/"config.json"), yes=False,
+                archive=str(archive), firmware="06.00", force=False, no_prepare=False,
+                verbose=False, defconfig="test_defconfig", allow_unverified_source=False)
+            def fetch(args):
+                calls.append("glibc")
+                include.mkdir()
+                (include/"elf.h").write_text("public declarations")
+            with (mock.patch.object(psvr2_build.platform,"system",return_value="Darwin"),
+                  mock.patch.dict(os.environ,{"PSVR2_HOST_INCLUDE":str(include)}),
+                  mock.patch.object(psvr2_build,"cmd_bootstrap",return_value=0),
+                  mock.patch.object(psvr2_build,"load_config",return_value={"schema":1,"firmwares":{}}),
+                  mock.patch.object(psvr2_build,"import_source_archive",side_effect=lambda *_args,**_kwargs:calls.append("import")),
+                  mock.patch.object(psvr2_build,"cmd_sources",side_effect=fetch),
+                  mock.patch.object(psvr2_build,"resolve_settings",return_value=argparse.Namespace()),
+                  mock.patch.object(psvr2_build,"prepare_kernel",side_effect=lambda *_args:calls.append("prepare")),
+                  mock.patch.object(psvr2_build,"cmd_doctor",return_value=0),
+                  redirect_stdout(io.StringIO())):
+                self.assertEqual(psvr2_build.cmd_setup(arguments),0)
+            self.assertEqual(calls,["import","glibc","prepare"])
+
+    def test_doctor_reports_missing_host_toolkit_dependencies(self):
+        settings=argparse.Namespace(make="make",cross_prefix="cross-",tool_cc=("zig","cc"),
+            glibc_version="2.28",kernel_source=None,kernel_build=Path("/unconfigured"),sysroot=None,
+            host_paths=(),firmware="06.00")
+        output=io.StringIO()
+        with (mock.patch.object(psvr2_build.platform,"system",return_value="Linux"),
+              mock.patch.object(psvr2_build,"resolve_settings",return_value=settings),
+              mock.patch.object(psvr2_build,"discover_host_build_helpers",return_value={key:None for key in ("cmake","ctest","pkg_config","libusb")}),
+              mock.patch.object(psvr2_build,"kernel_ready",return_value=False),
+              redirect_stdout(output)):
+            self.assertEqual(psvr2_build.cmd_doctor(argparse.Namespace(config=None)),1)
+        for label in ("CMake >=3.20","CTest >=3.20","pkg-config","libusb development files"):
+            self.assertIn(label+": not found",output.getvalue())
 
 
 class ImportTests(unittest.TestCase):

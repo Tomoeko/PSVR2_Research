@@ -27,6 +27,42 @@ input and is never bundled. Run these read-only checks first:
 installation. `--check` does not install anything. Linux users should supply
 their distribution's GNU make and cross compiler.
 
+## macOS from a fresh checkout
+
+Install Apple's Command Line Tools first if they are missing:
+
+```sh
+xcode-select --install
+```
+
+Finish Apple's installer, then download or clone this repository. Access is
+required while the repository is private. Run the following from its root:
+
+```sh
+./build.sh bootstrap
+./build.sh sources kernel --firmware 06.00
+./build.sh setup .local/psvr2-external/archives/linux-PSVR2_06.00.tar.zip --firmware 06.00
+./build.sh modules --firmware 06.00
+./build.sh tools --firmware 06.00 --download
+./psvr2_krw_c/build.sh release
+./build.sh doctor --firmware 06.00
+```
+
+Bootstrap checks the native Homebrew installation, GNU make, Arm GCC/binutils,
+Zig, CMake/CTest, pkg-config, libusb, `bc`, and Perl. Approve missing tool
+installations when prompted; source downloads require internet access. Setup
+imports the verified Sony kernel, obtains the external host ELF declarations
+on macOS, and prepares the matching kernel configuration. The `tools` command
+also downloads and builds Sony's BusyBox. SDL2 is optional for the stream viewer:
+install it with `/opt/homebrew/bin/brew install sdl2` on Apple Silicon, or
+`/usr/local/bin/brew install sdl2` on Intel, before the host build if needed.
+
+The host build locates native Homebrew executables and package metadata even
+before its `bin` directory is added to the user's shell profile. Bootstrap
+saves target compiler paths, so the macOS sequence needs no Linux compiler
+prefix copied from the examples below. Apple Silicon builds have been exercised;
+Intel tool discovery is covered by host tests and still needs a full native build.
+
 Sony provides the public source downloads at its
 [PSVR2 open source page](https://www.playstation.com/en-us/oss/ps-vr2/), including
 [Linux](https://www.playstation.com/en-us/oss/ps-vr2/linux-kernel/),
@@ -82,6 +118,8 @@ dependencies. Building does not upload or install modules.
 ./build.sh matrix modules --firmwares all
 ```
 
+The optional matrix command requires both maintained kernel source families
+to have been imported and prepared; the 06.00 setup above prepares only 06.00.
 Outputs go to `output/psvr2-build/<profile>/modules`. Build receipts record
 source identities, artifact hashes, and the selected profile. Use `matrix
 modules --help` for explicit profile selection; the default is `06.00`.
@@ -118,25 +156,27 @@ for supported formats and test dependencies. Host USB tooling has a separate nat
 
 ## RAM deployment check
 
-After building the modules, BusyBox, and host toolkit, start with the matching
-Stage1 and an explicit RAM location. Run from the repository root:
+After building the modules, BusyBox, and host toolkit, start from a fresh headset
+boot with an explicit RAM location. Load the teardown helper before Stage1 so
+it can track Stage1 and its later dependencies. Run from the repository root:
 
 ```sh
 export PSVR2_BUSYBOX=output/psvr2-build/06.00/tools/busybox
-psvr2_krw_c/.local/build-release/psvr2_krw_c --tmp --no-serial --stage1 output/psvr2-build/06.00/modules/stage1.ko
+psvr2_krw_c/.local/build-release/psvr2_krw_c --tmp --no-serial --s1off
 ```
 
-In the toolkit session, upload the dependency chain before loading it. The
-serial command reads target `/tmp` files; it does not discover host module
-output automatically:
+In the toolkit session, load the helper through the initial execution path,
+then load Stage1 and upload the serial dependency chain. The serial command
+reads target `/tmp` files; it does not discover host module output automatically:
 
 ```text
+krw upload output/psvr2-build/06.00/modules/rmmod_helper.ko
+krw exec insmod /tmp/rmmod_helper.ko
+krw stage1 output/psvr2-build/06.00/modules/stage1.ko
 krw fast_upload output/psvr2-build/06.00/tools/busybox
-krw fast_upload output/psvr2-build/06.00/modules/rmmod_helper.ko
 krw fast_upload output/psvr2-build/06.00/modules/u_serial.ko
 krw fast_upload output/psvr2-build/06.00/modules/usb_f_acm.ko
 krw fast_upload output/psvr2-build/06.00/modules/stage3_serial.ko
-krw s1exec test -w /proc/rmmod_helper || insmod /tmp/rmmod_helper.ko
 krw serial reset double-evict
 krw serial status
 ```
@@ -145,6 +185,9 @@ Reset re-enumerates USB; reconnect when necessary. These commands test the RAM
 candidate. Persistent replacement is a separate guarded transaction described
 in the [host toolkit guide](../psvr2_krw_c/docs/persistent-module-replacement.md).
 Match the automatically detected device profile before any deployment.
+If modules are already running, reuse their verified chain or reboot before
+this first-install sequence. `--s1off` skips startup loading; it does not unload
+an existing Stage1. Do not repeat `insmod` blindly on an already loaded helper.
 
 Upload and run the display tool in the same toolkit session:
 
@@ -163,6 +206,38 @@ second input port for a shell. In the target shell, `/tmp/open_vrhmd --help`
 lists commands; `/tmp/open_vrhmd gradient` starts a display pattern. Ctrl-C
 stops that foreground tool and runs its teardown. `open_vrhmd stop` provides
 explicit display/audio cleanup. Ctrl-] closes only the host serial client.
+
+## Control and input ports
+
+Stage3 provides a control shell on target `ttyGS0` and a dedicated input bridge
+on `ttyGS1`. On macOS, list the new devices with `ls /dev/cu.usbmodem*`. Their
+numeric suffixes do not reliably identify those roles. Open a candidate with
+the serial tool and press Return: the control port returns a shell prompt.
+Close it with Ctrl-] before trying another port. Do not send shell commands
+to the input port.
+
+In the control shell, enable and inspect the software input route:
+
+```sh
+echo 'input bridge' > /proc/stage3
+echo 'input status' > /proc/stage3
+cat /proc/stage3
+```
+
+Select the other ACM port explicitly in the input application. Keep one host
+consumer per port. The included controller bridge reads a supported GuliKit
+USB controller and sends its 16-byte packets to that dedicated port:
+
+```sh
+psvr2_krw_c/.local/build-release/psvr2_controller_bridge /dev/cu.usbmodemYYYY
+```
+
+To inspect those controller packets, upload the built `input_verify` with
+`krw fast_upload`, then run `/tmp/input_verify --bridge` in the target shell.
+Stop that diagnostic before another target application reads `/dev/fast_input`.
+The Wii Menu's black mouse window and mouse packet decoder live in the external
+menu project; use its pointer application with this same dedicated input port.
+The generic controller diagnostic decodes controller packets only.
 
 ## External Wii Menu project
 

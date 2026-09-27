@@ -9,6 +9,19 @@ clean_build=0
 jobs=""
 cmake_args=()
 
+# Find native Homebrew tools even before the user updates their shell profile.
+if [[ "$(uname -s)" == Darwin ]]; then
+    case "$(uname -m)" in
+        arm64) host_brew_prefix=/opt/homebrew ;;
+        x86_64) host_brew_prefix=/usr/local ;;
+        *) host_brew_prefix= ;;
+    esac
+    if [[ -n "$host_brew_prefix" && -d "$host_brew_prefix/bin" ]]; then
+        export PATH="$host_brew_prefix/bin:${PATH:-/usr/bin:/bin}"
+        export PKG_CONFIG_PATH="$host_brew_prefix/lib/pkgconfig:$host_brew_prefix/share/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+    fi
+fi
+
 usage() {
     cat <<'EOF'
 Usage: ./build.sh [profile] [options] [-- CMake options]
@@ -106,7 +119,12 @@ if ((clean_build)); then
 fi
 
 printf 'Configuring %s build in %s\n' "$profile" "$build_dir"
-cmake --preset "$profile" -S "$script_dir" "${cmake_args[@]}"
+# Apple's Bash 3.2 treats an empty array as unset under nounset.
+if ((${#cmake_args[@]})); then
+    cmake --preset "$profile" -S "$script_dir" "${cmake_args[@]}"
+else
+    cmake --preset "$profile" -S "$script_dir"
+fi
 
 build_command=(cmake --build "$build_dir")
 if [[ -n "$jobs" ]]; then
