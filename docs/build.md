@@ -35,8 +35,8 @@ Install Apple's Command Line Tools first if they are missing:
 xcode-select --install
 ```
 
-Finish Apple's installer, then download or clone this repository. Access is
-required while the repository is private. Run the following from its root:
+Finish Apple's installer, then download or clone this repository. Run the
+following from its root:
 
 ```sh
 ./build.sh bootstrap

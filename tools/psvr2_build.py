@@ -920,7 +920,7 @@ def kernel_make_base(settings: Settings) -> list[str]:
     return command
 
 
-def kernel_host_environment(settings: Settings) -> dict[str, str] | None:
+def host_path_environment(settings: Settings) -> dict[str, str]:
     environment: dict[str, str] = {}
     if settings.host_paths:
         existing = os.environ.get("PATH", "")
@@ -928,6 +928,11 @@ def kernel_host_environment(settings: Settings) -> dict[str, str] | None:
         if existing:
             entries.append(existing)
         environment["PATH"] = os.pathsep.join(entries)
+    return environment
+
+
+def kernel_host_environment(settings: Settings) -> dict[str, str] | None:
+    environment = host_path_environment(settings)
     if platform.system() == "Darwin":
         compatibility_headers = Path(os.environ.get("PSVR2_HOST_INCLUDE", str(REPO_ROOT / ".local/inputs/host-include"))).expanduser().resolve()
         if not (compatibility_headers / "elf.h").is_file():
@@ -2480,7 +2485,7 @@ def wii_menu_inputs(project: Path, runtime_root: Path) -> tuple[Path, Path]:
 
 def wii_menu_compiler(settings: Settings) -> list[str]:
     compiler = list(settings.tool_cc)
-    if not compiler or not executable(compiler[0]):
+    if not compiler or not executable_with_host_paths(compiler[0], settings):
         raise BuildError("PSVR2 userspace compiler is unavailable; run ./build.sh doctor")
     if Path(compiler[0]).name == "zig" and compiler[1:] == ["cc"]:
         compiler += ["-target", f"aarch64-linux-gnu.{settings.glibc_version}"]
@@ -2498,7 +2503,7 @@ def cmd_wii_menu(args: argparse.Namespace) -> int:
     runtime_root = (Path(args.runtime_root).expanduser().resolve() if args.runtime_root
                     else REPO_ROOT / ".local/inputs/psvr2-runtime")
     egl, gles = wii_menu_inputs(project, runtime_root)
-    cmake = executable("cmake")
+    cmake = executable_with_host_paths("cmake", settings)
     if not cmake:
         raise BuildError("CMake 3.20 or newer is required to build the maintained Wii Menu project")
     work = settings.output / "work" / "wii-menu"
@@ -2514,10 +2519,11 @@ def cmd_wii_menu(args: argparse.Namespace) -> int:
         wrapper.write_text(wrapper_text)
         wrapper.chmod(0o755)
     build = work / "cmake"
-    environment = {
+    environment = host_path_environment(settings)
+    environment.update({
         "ZIG_GLOBAL_CACHE_DIR": str(settings.output / "work/zig-cache/global"),
         "ZIG_LOCAL_CACHE_DIR": str(settings.output / "work/zig-cache/local"),
-    }
+    })
     command = [
         cmake, "-S", str(project), "-B", str(build),
         "-DCMAKE_SYSTEM_NAME=Linux", "-DCMAKE_SYSTEM_PROCESSOR=aarch64",
@@ -2542,7 +2548,7 @@ def cmd_wii_menu(args: argparse.Namespace) -> int:
         shutil.copy2(debug_binary, binary)
     else:
         run([cross_tool(settings, "strip"), "-s", "--strip-unneeded", "-o",
-             str(binary), str(debug_binary)], verbose=settings.verbose)
+             str(binary), str(debug_binary)], verbose=settings.verbose, env=environment)
     shutil.copy2(binary, output / "wii-menu")
     digest = hashlib.sha256()
     for directory in ("src", "include", "cmake"):
