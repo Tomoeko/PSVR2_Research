@@ -75,15 +75,15 @@ size_t psvr2_build_text_patch_payload(
 
     /*
      * The 200-byte report ends immediately before the untouched giveback
-     * frame. The helper reconstructs the endpoint pointer, preserves the
-     * observed endpoint state byte, and resumes the normal completion unwind.
+     * frame. The helper reconstructs the endpoint pointer; X22 is zero so
+     * the normal completion unwind clears mep->busy.
      */
     psvr2_store_le64(out + 64, constants->fw.stack_cookie);
     psvr2_store_le64(out + 80, constants->fw.patch_helper);
     psvr2_store_le64(out + 88, instruction);
     psvr2_store_le64(out + 96, target);
     psvr2_store_le64(out + 104, registers->x21);
-    psvr2_store_le64(out + 112, registers->x22);
+    psvr2_store_le64(out + 112, 0);
     psvr2_store_le64(out + 192, constants->fw.stack_cookie);
     return PSVR2_TEXT_PATCH_PAYLOAD_SIZE;
 }
@@ -248,23 +248,23 @@ bool psvr2_build_cold_cleanup_helper(
     if (!psvr2_arm64_branch(
             address + 8, constants->fw.patch_text, true, &branch))
         return false;
-    psvr2_store_le32(out + 8, branch);
+    psvr2_store_le32(out + 8, branch); /* bl patch_text */
     psvr2_store_le32(
-        out + 12, UINT32_C(0xf9403eb4)); /* ldr x20,[x21,#0x78] */
+        out + 12, UINT32_C(0xf9403eb4)); /* ldr x20,[x21,#0x78]: mep */
     psvr2_store_le32(
         out + 16, UINT32_C(0xaa1503e0)); /* mov x0,x21 */
     if (!psvr2_arm64_branch(
             address + 20, constants->fw.raw_spin_lock, true, &branch))
         return false;
-    psvr2_store_le32(out + 20, branch);
+    psvr2_store_le32(out + 20, branch); /* bl raw_spin_lock */
     psvr2_store_le32(
         out + 24,
-        UINT32_C(0x39033696)); /* strb w22,[x20,#0xcd] */
+        UINT32_C(0x3903369f)); /* strb wzr,[x20,#0xcd]: mep->busy=0 */
     if (!psvr2_arm64_branch(
             address + 28,
             constants->fw.mtu3_ep0_isr_epilogue, false, &branch))
         return false;
-    psvr2_store_le32(out + 28, branch);
+    psvr2_store_le32(out + 28, branch); /* b mtu3_ep0_isr_epilogue */
     return true;
 }
 

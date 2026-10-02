@@ -10,7 +10,7 @@
 bool psvr2_build_temporary_patch_helper(
     const psvr2_constants *constants, uint64_t address,
     uint64_t mep, uint64_t pte_address,
-    uint8_t pte_byte, uint8_t endpoint_state,
+    uint8_t pte_byte,
     uint8_t out[PSVR2_TEMP_HELPER_SIZE]);
 bool psvr2_kernel_probe_slot_is_pristine(psvr2_krw *krw);
 bool psvr2_kernel_exact_execution_anchors(psvr2_krw *krw);

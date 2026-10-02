@@ -232,7 +232,7 @@ static bool text_patch_apply_staged(
     psvr2_build_fast_write_payload(
         constants, payload, target, scratch,
         krw->spinlock,
-        (uint64_t)krw->regs.x22 | ((uint64_t)(length / 4U) << 8),
+        (uint64_t)(length / 4U) << 8,
         constants->fw.batch_patch_helper);
     (void)psvr2_krw_trigger_overflow(
         krw, payload, sizeof(payload), 2500);
@@ -380,7 +380,7 @@ static bool allocate_workspace(
     psvr2_build_fast_write_payload(
         constants, payload, constants->fw.workspace_slot,
         PSVR2_RUNTIME_WORKSPACE_SIZE,
-        krw->spinlock, krw->regs.x22,
+        krw->spinlock, 0,
         constants->fw.alloc_helper);
     bool sent = psvr2_krw_trigger_overflow(
         krw, payload, sizeof(payload), 2500);
@@ -464,7 +464,7 @@ static bool kernel_force_terminal_action(
     if (psvr2_build_fast_write_payload(
             runtime->krw->ex->constants, payload,
             0, 0, runtime->krw->spinlock,
-            runtime->krw->regs.x22,
+            0,
             recovery) != sizeof(payload))
         return false;
 

@@ -146,12 +146,9 @@ static bool trigger_tlbi(
 static bool write_byte_preserving_endpoint(
     psvr2_krw *krw, uint64_t address, uint8_t value) {
     for (unsigned attempt = 0; attempt < 5; ++attempt) {
-        bool wrote = psvr2_krw_write_byte_blind(krw, address, value);
-        bool restored = psvr2_krw_write_byte_blind(
-            krw, krw->regs.mep + PSVR2_MTU3_ENDPOINT_STATE_OFFSET,
-            krw->regs.x22);
         uint8_t observed;
-        if (wrote && restored &&
+        /* The byte writer restores mep->busy to zero before returning. */
+        if (psvr2_krw_write_byte_blind(krw, address, value) &&
             psvr2_krw_read_ex(
                 krw, address, &observed, 1, true, false) &&
             observed == value)
@@ -256,7 +253,7 @@ static bool build_bootstrap_images(
                krw->ex->constants, temp, krw->regs.mep,
                mapping->address + pxn_byte,
                (uint8_t)(mapping->value >> (pxn_byte * 8U)),
-               krw->regs.x22, images->temporary);
+               images->temporary);
 }
 
 static bool helpers_match(
@@ -473,8 +470,7 @@ static bool install_helper_with_inline_batch(
                 address + offset,
                 krw->ex->request_buffer + INLINE_BATCH_SOURCE_OFFSET,
                 krw->spinlock,
-                (uint64_t)krw->regs.x22 |
-                    ((uint64_t)(chunk / 4U) << 8),
+                (uint64_t)(chunk / 4U) << 8,
                 PSVR2_BATCH_PATCH_SC) != sizeof(payload))
             return false;
         memcpy(

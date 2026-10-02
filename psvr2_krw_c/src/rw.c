@@ -235,14 +235,49 @@ bool psvr2_krw_read_string(psvr2_krw *krw, uint64_t addr, char *out, size_t max_
 
 bool psvr2_krw_write_byte_blind(psvr2_krw *krw, uint64_t addr, uint8_t value) {
     if (!sync_connection_generation(krw) ||
-        !krw->spinlock || !krw->regs.valid)
+        !krw->spinlock || !krw->regs.valid || !krw->regs.mep)
         return false;
     uint8_t payload[PSVR2_WRITE_PAYLOAD_SIZE];
-    psvr2_build_strb_payload(krw->ex->constants, payload, addr, value, krw->spinlock);
-    for (unsigned i = 0; i < 3; ++i)
-        if (psvr2_krw_trigger_overflow(
-                krw, payload, sizeof(payload), 2500))
-            return true;
+    if (psvr2_build_strb_payload(
+            krw->ex->constants, payload, addr, value,
+            krw->spinlock) != sizeof(payload))
+        return false;
+    /* The completion path stores W22 into mep->busy. Restore zero after an
+     * arbitrary byte write, as corrected by RealSupremium in vr2jb. */
+    const uint64_t busy =
+        krw->regs.mep + PSVR2_MTU3_ENDPOINT_STATE_OFFSET;
+    uint8_t restore[PSVR2_WRITE_PAYLOAD_SIZE];
+    if (addr != busy &&
+        psvr2_build_strb_payload(
+            krw->ex->constants, restore, busy, 0,
+            krw->spinlock) != sizeof(restore))
+        return false;
+    for (unsigned i = 0; i < 3; ++i) {
+        bool attempted = false;
+        bool wrote = psvr2_krw_trigger_overflow_ex(
+            krw, payload, sizeof(payload), 2500, &attempted);
+        if (!attempted) return false;
+        if (addr == busy) {
+            if (wrote) return true;
+            continue;
+        }
+        /* A failed USB response does not prove that the payload did not run. */
+        bool restored = false;
+        for (unsigned retry = 0; retry < 3; ++retry)
+            if (psvr2_krw_trigger_overflow(
+                    krw, restore, sizeof(restore), 2500)) {
+                restored = true;
+                break;
+            }
+        if (!restored) {
+            krw->regs.valid = false;
+            krw->last_result = psvr2_result_error(
+                PSVR2_STATUS_RECOVERY_REQUIRED, 0,
+                "endpoint busy-state restoration was not confirmed");
+            return false;
+        }
+        if (wrote) return true;
+    }
     return false;
 }
 
@@ -277,7 +312,7 @@ bool psvr2_krw_write_u64_fast(psvr2_krw *krw, uint64_t addr, uint64_t value) {
         return false;
     uint8_t payload[PSVR2_WRITE_PAYLOAD_SIZE];
     psvr2_build_fast_write_payload(krw->ex->constants, payload, addr, value,
-                                   krw->spinlock, krw->regs.x22,
+                                   krw->spinlock, 0,
                                    krw->ex->constants->str_helper);
     return psvr2_krw_trigger_overflow(
         krw, payload, sizeof(payload), 2500);

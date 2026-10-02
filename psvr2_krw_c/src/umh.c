@@ -229,7 +229,7 @@ static bool trigger_umh(psvr2_runtime *runtime) {
     return psvr2_build_fast_write_payload(
                constants, payload,
                constants->runtime_data, constants->runtime_data,
-               runtime->krw->spinlock, runtime->krw->regs.x22,
+               runtime->krw->spinlock, 0,
                constants->umh_trigger) == sizeof(payload) &&
            psvr2_krw_trigger_overflow(
                runtime->krw, payload, sizeof(payload), 2500);

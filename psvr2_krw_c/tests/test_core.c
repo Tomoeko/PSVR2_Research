@@ -594,12 +594,13 @@ static void test_payloads(void) {
            UINT32_C(0xd503201f));
     assert(psvr2_load_le64(patch_payload + 96) == PSVR2_STR_SC);
     assert(psvr2_load_le64(patch_payload + 104) == registers.x21);
-    assert(psvr2_load_le64(patch_payload + 112) == registers.x22);
+    assert(psvr2_load_le64(patch_payload + 112) == 0);
     assert(psvr2_load_le64(patch_payload + 192) == PSVR2_STACK_COOKIE);
 
     /*
      * Mode 1 ends at the sub_410 frame boundary.  The patch helper restores
-     * X20/X22 and clean_return resumes the untouched completion unwind.
+     * X20 and clean_return resumes the untouched completion unwind; X22 is
+     * zero so the endpoint busy byte is cleared.
      */
     assert(sizeof(patch_payload) == 0xc8U);
 
@@ -852,7 +853,7 @@ static void test_payloads(void) {
         c.fw.tlbi_cleanup_helper + 16,
         c.fw.mtu3_ep0_isr_epilogue, false, &cleanup_return));
     assert(psvr2_load_le32(cleanup + 8) == cleanup_call);
-    assert(psvr2_load_le32(cleanup + 12) == UINT32_C(0x39033696));
+    assert(psvr2_load_le32(cleanup + 12) == UINT32_C(0x3903369f));
     assert(psvr2_load_le32(cleanup + 16) == cleanup_return);
 
     uint8_t tlbi_payload[PSVR2_TLBI_PAYLOAD_SIZE];
@@ -887,7 +888,7 @@ static void test_bootstrap_payload(void) {
     uint8_t helper[PSVR2_TEMP_HELPER_SIZE];
     assert(psvr2_build_temporary_patch_helper(
         &constants, address, mep, pte_address,
-        UINT8_C(0x60), UINT8_C(0x5a),
+        UINT8_C(0x60),
         helper));
 
     uint32_t instruction;
@@ -895,9 +896,10 @@ static void test_bootstrap_payload(void) {
     assert(psvr2_arm64_branch(
         address + 8, constants.fw.patch_text, true, &instruction));
     assert(psvr2_load_le32(helper + 8) == instruction);
-    assert(psvr2_load_le32(helper + 24) == UINT32_C(0x52800b41));
+    assert(psvr2_load_le32(helper + 24) == UINT32_C(0x52800001));
     assert(psvr2_load_le32(helper + PSVR2_TEMP_FINALIZER_OFFSET) ==
            UINT32_C(0xaa1503e0));
+    assert(psvr2_load_le32(helper + 48) == UINT32_C(0x52800001));
     assert(psvr2_load_le32(helper + 88) == UINT32_C(0x52800c01));
     assert(psvr2_load_le32(helper + 100) == UINT32_C(0xd503201f));
     assert(psvr2_load_le64(helper + 104) ==
@@ -906,9 +908,9 @@ static void test_bootstrap_payload(void) {
     assert(psvr2_load_le64(helper + 120) == mep);
 
     assert(!psvr2_build_temporary_patch_helper(
-        &constants, address + 1, mep, pte_address, 0, 0, helper));
+        &constants, address + 1, mep, pte_address, 0, helper));
     assert(!psvr2_build_temporary_patch_helper(
-        &constants, address, mep, pte_address, 0, 0, NULL));
+        &constants, address, mep, pte_address, 0, NULL));
 }
 
 static void test_cold_bootstrap_payload(void) {
@@ -996,6 +998,8 @@ static void test_cold_bootstrap_payload(void) {
     assert(psvr2_build_cold_cleanup_helper(
         &constants, PSVR2_BATCH_PATCH_SC, previous_cleanup));
     assert(psvr2_load_le32(previous_cleanup) == UINT32_C(0xf9400e60));
+    assert(psvr2_load_le32(previous_cleanup + 24) ==
+           UINT32_C(0x3903369f));
     assert(!psvr2_build_cold_cleanup_helper(
         &constants, PSVR2_STR_SC, previous_cleanup));
 

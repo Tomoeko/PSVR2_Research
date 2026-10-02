@@ -7,7 +7,7 @@
 bool psvr2_build_temporary_patch_helper(
     const psvr2_constants *constants, uint64_t address,
     uint64_t mep, uint64_t pte_address,
-    uint8_t pte_byte, uint8_t endpoint_state,
+    uint8_t pte_byte,
     uint8_t out[PSVR2_TEMP_HELPER_SIZE]) {
     if (!constants || !out || (address & UINT64_C(3)) != 0 ||
         !mep || !pte_address)
@@ -33,9 +33,7 @@ bool psvr2_build_temporary_patch_helper(
         return false;
     psvr2_store_le32(out + 20, instruction);
     psvr2_store_le32(
-        out + 24,
-        UINT32_C(0x52800001) |
-            ((uint32_t)endpoint_state << 5)); /* mov w1,#state */
+        out + 24, UINT32_C(0x52800001)); /* mov w1,#0: mep->busy */
     if (!psvr2_arm64_ldr_literal(
             0, address + 28, address + 120, &instruction))
         return false;
@@ -59,9 +57,7 @@ bool psvr2_build_temporary_patch_helper(
         return false;
     psvr2_store_le32(out + 44, instruction);
     psvr2_store_le32(
-        out + 48,
-        UINT32_C(0x52800001) |
-            ((uint32_t)endpoint_state << 5)); /* mov w1,#state */
+        out + 48, UINT32_C(0x52800001)); /* mov w1,#0: mep->busy */
     psvr2_store_le32(
         out + 52, UINT32_C(0x39033681)); /* strb w1,[x20,#0xcd] */
     psvr2_store_le32(out + 56, UINT32_C(0xd100c3ff)); /* sub sp,sp,#0x30 */

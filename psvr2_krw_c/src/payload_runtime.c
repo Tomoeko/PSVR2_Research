@@ -196,7 +196,7 @@ bool psvr2_build_str_helper(
     uint32_t instruction;
     psvr2_store_le32(out + 0, UINT32_C(0xf9000293)); /* str x19,[x20] */
     psvr2_store_le32(
-        out + 4, UINT32_C(0xf9403eb4)); /* ldr x20,[x21,#0x78] */
+        out + 4, UINT32_C(0xf9403eb4)); /* ldr x20,[x21,#0x78]: mep */
     psvr2_store_le32(out + 8, UINT32_C(0xd503201f)); /* nop */
     if (!psvr2_arm64_branch(
             constants->fw.str_helper + 12, constants->fw.clean_return,
@@ -222,7 +222,7 @@ bool psvr2_build_tlbi_cleanup(
         return false;
     psvr2_store_le32(out + 8, instruction);
     psvr2_store_le32(
-        out + 12, UINT32_C(0x39033696)); /* strb w22,[x20,#0xcd] */
+        out + 12, UINT32_C(0x3903369f)); /* strb wzr,[x20,#0xcd]: busy=0 */
     if (!psvr2_arm64_branch(
             constants->fw.tlbi_cleanup_helper + 16,
             constants->fw.mtu3_ep0_isr_epilogue, false, &instruction))
